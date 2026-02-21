@@ -173,6 +173,16 @@
     
     <div id="controls">
         <div class="control-row">
+            <label>Renderer</label>
+            <select id="rendererSelect">
+                <option value="WebGPU">WebGPU (32-bit)</option>
+                <option value="WebGPU64">WebGPU (64-bit)</option>
+                <option value="WebGL">WebGL (32-bit)</option>
+                <option value="WebGL64">WebGL (64-bit)</option>
+                <option value="Canvas2D">Canvas 2D (64-bit)</option>
+            </select>
+        </div>
+        <div class="control-row">
             <label>Palette</label>
             <select id="palette">
                 <option value="fire">Fire</option>
@@ -228,7 +238,7 @@
     </div>
 
     <script type="module">
-        const canvas = document.getElementById('canvas');
+        let canvas = document.getElementById('canvas');
         
         const state = {
             centerX: -0.5,
@@ -293,6 +303,12 @@
         };
         
         let renderer = null;
+
+        function splitDouble(v) {
+            const high = Math.fround(v);
+            const low = v - high;
+            return [high, low];
+        }
         
         class Canvas2DRenderer {
             constructor(canvas) {
@@ -650,6 +666,247 @@
                 };
             }
         }
+
+        class WebGLRenderer64 extends WebGLRenderer {
+            initShaders() {
+                const gl = this.gl;
+                const isWebGL2 = gl instanceof WebGL2RenderingContext;
+                
+                const vsSource = isWebGL2 ? `#version 300 es
+                    in vec2 a_position;
+                    out vec2 v_uv;
+                    void main() {
+                        v_uv = a_position * 0.5 + 0.5;
+                        gl_Position = vec4(a_position, 0.0, 1.0);
+                    }
+                ` : `
+                    attribute vec2 a_position;
+                    varying vec2 v_uv;
+                    void main() {
+                        v_uv = a_position * 0.5 + 0.5;
+                        gl_Position = vec4(a_position, 0.0, 1.0);
+                    }
+                `;
+                
+                const commonFs = `
+                    uniform vec2 u_centerX;
+                    uniform vec2 u_centerY;
+                    uniform float u_zoom;
+                    uniform int u_maxIter;
+                    uniform int u_palette;
+                    uniform vec2 u_resolution;
+                    uniform float u_split;
+
+                    vec2 ds_set(float a) { return vec2(a, 0.0); }
+
+                    vec2 ds_add(vec2 a, vec2 b) {
+                        float s = a.x + b.x;
+                        float v = s - a.x;
+                        float e = (a.x - (s - v)) + (b.x - v);
+                        float g = e + a.y + b.y;
+                        float zh = s + g;
+                        float zl = g - (zh - s);
+                        return vec2(zh, zl);
+                    }
+
+                    vec2 ds_sub(vec2 a, vec2 b) {
+                        return ds_add(a, vec2(-b.x, -b.y));
+                    }
+
+                    vec2 ds_mul(vec2 a, vec2 b) {
+                        float hx = a.x * u_split;
+                        float a_hi = hx - (hx - a.x);
+                        float a_lo = a.x - a_hi;
+                        float hy = b.x * u_split;
+                        float b_hi = hy - (hy - b.x);
+                        float b_lo = b.x - b_hi;
+                        float p = a.x * b.x;
+                        float e = ((a_hi * b_hi - p) + a_hi * b_lo + a_lo * b_hi) + a_lo * b_lo;
+                        float g = e + a.x * b.y + a.y * b.x;
+                        float zh = p + g;
+                        float zl = g - (zh - p);
+                        return vec2(zh, zl);
+                    }
+
+                    vec2 ds_sqr(vec2 a) {
+                        float hx = a.x * u_split;
+                        float a_hi = hx - (hx - a.x);
+                        float a_lo = a.x - a_hi;
+                        float p = a.x * a.x;
+                        float e = ((a_hi * a_hi - p) + 2.0 * a_hi * a_lo) + a_lo * a_lo;
+                        float g = e + 2.0 * a.x * a.y;
+                        float zh = p + g;
+                        float zl = g - (zh - p);
+                        return vec2(zh, zl);
+                    }
+
+                    vec3 firePalette(float t) {
+                        vec3 c0 = vec3(0,0,0); vec3 c1 = vec3(.12,0,0); vec3 c2 = vec3(.24,.04,0); vec3 c3 = vec3(.35,.08,0);
+                        vec3 c4 = vec3(.47,.16,0); vec3 c5 = vec3(.63,.24,0); vec3 c6 = vec3(.78,.39,.04); vec3 c7 = vec3(.9,.55,.04);
+                        vec3 c8 = vec3(1,.71,.2); vec3 c9 = vec3(1,.86,.47); vec3 c10 = vec3(1,1,.78); vec3 c11 = vec3(1,1,1);
+                        float idx = t * 11.0;
+                        if (idx < 1.0) return mix(c0, c1, idx); if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0); if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0); if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0); if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        if (idx < 9.0) return mix(c8, c9, idx - 8.0); if (idx < 10.0) return mix(c9, c10, idx - 9.0);
+                        return mix(c10, c11, idx - 10.0);
+                    }
+                    vec3 oceanPalette(float t) {
+                        vec3 c0 = vec3(0,0,.08); vec3 c1 = vec3(0,.08,.24); vec3 c2 = vec3(0,.2,.39); vec3 c3 = vec3(0,.35,.51);
+                        vec3 c4 = vec3(.08,.51,.59); vec3 c5 = vec3(.24,.67,.71); vec3 c6 = vec3(.47,.78,.82); vec3 c7 = vec3(.71,.86,.9);
+                        vec3 c8 = vec3(.86,.94,.98); vec3 c9 = vec3(1,1,1);
+                        float idx = t * 9.0;
+                        if (idx < 1.0) return mix(c0, c1, idx); if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0); if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0); if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0); if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        return mix(c8, c9, idx - 8.0);
+                    }
+                    vec3 rainbowPalette(float t) {
+                        vec3 c0 = vec3(1,0,0); vec3 c1 = vec3(1,.5,0); vec3 c2 = vec3(1,1,0); vec3 c3 = vec3(0,1,0);
+                        vec3 c4 = vec3(0,1,1); vec3 c5 = vec3(0,0,1); vec3 c6 = vec3(.5,0,1); vec3 c7 = vec3(1,0,1);
+                        float idx = t * 7.0;
+                        if (idx < 1.0) return mix(c0, c1, idx); if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0); if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0); if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        return mix(c6, c7, idx - 6.0);
+                    }
+                    vec3 electricPalette(float t) {
+                        vec3 c0 = vec3(0,0,0); vec3 c1 = vec3(.04,0,.12); vec3 c2 = vec3(.12,0,.31); vec3 c3 = vec3(.31,.08,.59);
+                        vec3 c4 = vec3(.59,.31,.78); vec3 c5 = vec3(.78,.59,1); vec3 c6 = vec3(1,1,1);
+                        float idx = t * 6.0;
+                        if (idx < 1.0) return mix(c0, c1, idx); if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0); if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0); return mix(c5, c6, idx - 5.0);
+                    }
+                    vec3 grayPalette(float t) { return vec3(t); }
+                    vec3 classicPalette(float t) {
+                        vec3 c0 = vec3(0,0,0); vec3 c1 = vec3(0,0,0); vec3 c2 = vec3(0,.17,.21); vec3 c3 = vec3(0,.3,.28);
+                        vec3 c4 = vec3(0,.34,.26); vec3 c5 = vec3(0,.4,.27); vec3 c6 = vec3(.15,.65,.25); vec3 c7 = vec3(.22,.64,.28);
+                        vec3 c8 = vec3(.32,.61,.34); vec3 c9 = vec3(.43,.59,.42); vec3 c10 = vec3(.54,.56,.51); vec3 c11 = vec3(.65,.54,.53);
+                        vec3 c12 = vec3(.76,.6,.55); vec3 c13 = vec3(.87,.7,.58); vec3 c14 = vec3(.93,.79,.69); vec3 c15 = vec3(1,1,1);
+                        float idx = t * 15.0;
+                        if (idx < 1.0) return mix(c0, c1, idx); if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0); if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0); if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0); if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        if (idx < 9.0) return mix(c8, c9, idx - 8.0); if (idx < 10.0) return mix(c9, c10, idx - 9.0);
+                        if (idx < 11.0) return mix(c10, c11, idx - 10.0); if (idx < 12.0) return mix(c11, c12, idx - 11.0);
+                        if (idx < 13.0) return mix(c12, c13, idx - 12.0); if (idx < 14.0) return mix(c13, c14, idx - 13.0);
+                        return mix(c14, c15, idx - 14.0);
+                    }
+                    vec3 getColor(float n, int maxIter, int palette) {
+                        if (n >= float(maxIter)) return vec3(0.0);
+                        float t = pow(n / float(maxIter), 0.5);
+                        if (palette == 0) return firePalette(t); if (palette == 1) return oceanPalette(t);
+                        if (palette == 2) return rainbowPalette(t); if (palette == 3) return electricPalette(t);
+                        if (palette == 4) return grayPalette(t); return classicPalette(t);
+                    }
+                `;
+
+                const fsSource = isWebGL2 ? `#version 300 es
+                    precision highp float;
+                    in vec2 v_uv;
+                    out vec4 outColor;
+                    ${commonFs}
+                    void main() {
+                        float aspect = u_resolution.x / u_resolution.y;
+                        float scale = 3.5 / u_zoom;
+                        float uvX = (v_uv.x - 0.5) * scale * aspect;
+                        float uvY = (v_uv.y - 0.5) * scale;
+                        vec2 cx = ds_add(u_centerX, ds_set(uvX));
+                        vec2 cy = ds_add(u_centerY, ds_set(uvY));
+                        vec2 zr = vec2(0.0); vec2 zi = vec2(0.0);
+                        int iter = 0;
+                        for (int i = 0; i < 4096; i++) {
+                            if (i >= u_maxIter) break;
+                            vec2 zr2 = ds_sqr(zr); vec2 zi2 = ds_sqr(zi);
+                            if (zr2.x + zi2.x > 4.0) break;
+                            vec2 newZr = ds_add(ds_sub(zr2, zi2), cx);
+                            vec2 newZi = ds_add(ds_add(ds_mul(zr, zi), ds_mul(zr, zi)), cy);
+                            zr = newZr; zi = newZi;
+                            iter++;
+                        }
+                        float n = float(iter);
+                        if (iter < u_maxIter) {
+                            float logZn = log(zr.x * zr.x + zi.x * zi.x) / 2.0;
+                            n = float(iter) + 1.0 - log(logZn / log(2.0)) / log(2.0);
+                        }
+                        outColor = vec4(getColor(n, u_maxIter, u_palette), 1.0);
+                    }
+                ` : `
+                    precision highp float;
+                    varying vec2 v_uv;
+                    ${commonFs}
+                    void main() {
+                        float aspect = u_resolution.x / u_resolution.y;
+                        float scale = 3.5 / u_zoom;
+                        float uvX = (v_uv.x - 0.5) * scale * aspect;
+                        float uvY = (v_uv.y - 0.5) * scale;
+                        vec2 cx = ds_add(u_centerX, ds_set(uvX));
+                        vec2 cy = ds_add(u_centerY, ds_set(uvY));
+                        vec2 zr = vec2(0.0); vec2 zi = vec2(0.0);
+                        int iter = 0;
+                        for (int i = 0; i < 4096; i++) {
+                            if (i >= u_maxIter) break;
+                            vec2 zr2 = ds_sqr(zr); vec2 zi2 = ds_sqr(zi);
+                            if (zr2.x + zi2.x > 4.0) break;
+                            vec2 newZr = ds_add(ds_sub(zr2, zi2), cx);
+                            vec2 newZi = ds_add(ds_add(ds_mul(zr, zi), ds_mul(zr, zi)), cy);
+                            zr = newZr; zi = newZi;
+                            iter++;
+                        }
+                        float n = float(iter);
+                        if (iter < u_maxIter) {
+                            float logZn = log(zr.x * zr.x + zi.x * zi.x) / 2.0;
+                            n = float(iter) + 1.0 - log(logZn / log(2.0)) / log(2.0);
+                        }
+                        gl_FragColor = vec4(getColor(n, u_maxIter, u_palette), 1.0);
+                    }
+                `;
+                
+                const vs = gl.createShader(gl.VERTEX_SHADER);
+                gl.shaderSource(vs, vsSource);
+                gl.compileShader(vs);
+                const fs = gl.createShader(gl.FRAGMENT_SHADER);
+                gl.shaderSource(fs, fsSource);
+                gl.compileShader(fs);
+                this.program = gl.createProgram();
+                gl.attachShader(this.program, vs);
+                gl.attachShader(this.program, fs);
+                gl.linkProgram(this.program);
+                this.u_centerX = gl.getUniformLocation(this.program, 'u_centerX');
+                this.u_centerY = gl.getUniformLocation(this.program, 'u_centerY');
+                this.u_zoom = gl.getUniformLocation(this.program, 'u_zoom');
+                this.u_maxIter = gl.getUniformLocation(this.program, 'u_maxIter');
+                this.u_palette = gl.getUniformLocation(this.program, 'u_palette');
+                this.u_resolution = gl.getUniformLocation(this.program, 'u_resolution');
+                this.u_split = gl.getUniformLocation(this.program, 'u_split');
+            }
+
+            render(centerX, centerY, zoom, paletteName) {
+                const gl = this.gl;
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                gl.viewport(0, 0, w, h);
+                gl.useProgram(this.program);
+                const paletteIndex = ['fire', 'ocean', 'rainbow', 'electric', 'grayscale', 'classic'].indexOf(paletteName);
+                const maxIter = Math.min(8192, state.iterBase + Math.floor(Math.log2(Math.max(1, zoom)) * 48));
+                const startTime = performance.now();
+                const [cxHigh, cxLow] = splitDouble(centerX);
+                const [cyHigh, cyLow] = splitDouble(centerY);
+                gl.uniform2f(this.u_centerX, cxHigh, cxLow);
+                gl.uniform2f(this.u_centerY, cyHigh, cyLow);
+                gl.uniform1f(this.u_zoom, zoom);
+                gl.uniform1i(this.u_maxIter, maxIter);
+                gl.uniform1i(this.u_palette, paletteIndex);
+                gl.uniform2f(this.u_resolution, w, h);
+                gl.uniform1f(this.u_split, 4097.0);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                return { maxIter, time: performance.now() - startTime };
+            }
+        }
         
         class WebGPURenderer {
             constructor(canvas) {
@@ -913,27 +1170,355 @@
                 };
             }
         }
+
+        class WebGPURenderer64 extends WebGPURenderer {
+            initShaders() {
+                const wgsl = `
+                    struct Uniforms {
+                        centerX: vec2f, // high, low
+                        centerY: vec2f, // high, low
+                        zoom: f32,
+                        maxIter: f32,
+                        palette: f32,
+                        padding: f32,
+                        resolution: vec2f,
+                    };
+                    
+                    @group(0) @binding(0) var<uniform> u: Uniforms;
+                    
+                    // Emulated double precision structs
+                    struct ds {
+                        x: f32, // high
+                        y: f32  // low
+                    }
+
+                    fn ds_add(a: ds, b: ds) -> ds {
+                        let s = a.x + b.x;
+                        let v = s - a.x;
+                        let e = (a.x - (s - v)) + (b.x - v);
+                        let g = e + a.y + b.y;
+                        let zh = s + g;
+                        let zl = g - (zh - s);
+                        return ds(zh, zl);
+                    }
+
+                    fn ds_sub(a: ds, b: ds) -> ds {
+                        return ds_add(a, ds(-b.x, -b.y));
+                    }
+                    
+                    fn ds_mul(a: ds, b: ds) -> ds {
+                        let c = 4097.0;
+                        let hx = a.x * c;
+                        let a_hi = hx - (hx - a.x);
+                        let a_lo = a.x - a_hi;
+                        
+                        let hy = b.x * c;
+                        let b_hi = hy - (hy - b.x);
+                        let b_lo = b.x - b_hi;
+                        
+                        let p = a.x * b.x;
+                        let e = ((a_hi * b_hi - p) + a_hi * b_lo + a_lo * b_hi) + a_lo * b_lo;
+                        
+                        let g = e + a.x * b.y + a.y * b.x;
+                        let zh = p + g;
+                        let zl = g - (zh - p);
+                        return ds(zh, zl);
+                    }
+
+                    fn ds_sqr(a: ds) -> ds {
+                        let c = 4097.0;
+                        let hx = a.x * c;
+                        let a_hi = hx - (hx - a.x);
+                        let a_lo = a.x - a_hi;
+                        
+                        let p = a.x * a.x;
+                        let e = ((a_hi * a_hi - p) + 2.0 * a_hi * a_lo) + a_lo * a_lo;
+                        
+                        let g = e + 2.0 * a.x * a.y;
+                        let zh = p + g;
+                        let zl = g - (zh - p);
+                        return ds(zh, zl);
+                    }
+
+                    // --- Palette functions (reused) ---
+                    fn firePalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 12>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.12, 0.0, 0.0), vec3f(0.24, 0.04, 0.0),
+                            vec3f(0.35, 0.08, 0.0), vec3f(0.47, 0.16, 0.0), vec3f(0.63, 0.24, 0.0),
+                            vec3f(0.78, 0.39, 0.04), vec3f(0.90, 0.55, 0.04), vec3f(1.0, 0.71, 0.20),
+                            vec3f(1.0, 0.86, 0.47), vec3f(1.0, 1.0, 0.78), vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 11.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 11) { return c[11]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn oceanPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 10>(
+                            vec3f(0.0, 0.0, 0.08), vec3f(0.0, 0.08, 0.24), vec3f(0.0, 0.2, 0.39),
+                            vec3f(0.0, 0.35, 0.51), vec3f(0.08, 0.51, 0.59), vec3f(0.24, 0.67, 0.71),
+                            vec3f(0.47, 0.78, 0.82), vec3f(0.71, 0.86, 0.90), vec3f(0.86, 0.94, 0.98),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 9.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 9) { return c[9]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn rainbowPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 8>(
+                            vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.5, 0.0), vec3f(1.0, 1.0, 0.0),
+                            vec3f(0.0, 1.0, 0.0), vec3f(0.0, 1.0, 1.0), vec3f(0.0, 0.0, 1.0),
+                            vec3f(0.5, 0.0, 1.0), vec3f(1.0, 0.0, 1.0)
+                        );
+                        let idx = t * 7.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 7) { return c[7]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn electricPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 7>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.04, 0.0, 0.12), vec3f(0.12, 0.0, 0.31),
+                            vec3f(0.31, 0.08, 0.59), vec3f(0.59, 0.31, 0.78), vec3f(0.78, 0.59, 1.0),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 6.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 6) { return c[6]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn classicPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 16>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.0, 0.0, 0.0), vec3f(0.0, 0.17, 0.21),
+                            vec3f(0.0, 0.30, 0.28), vec3f(0.0, 0.34, 0.26), vec3f(0.0, 0.40, 0.27),
+                            vec3f(0.15, 0.65, 0.25), vec3f(0.22, 0.64, 0.28), vec3f(0.32, 0.61, 0.34),
+                            vec3f(0.43, 0.59, 0.42), vec3f(0.54, 0.56, 0.51), vec3f(0.65, 0.54, 0.53),
+                            vec3f(0.76, 0.60, 0.55), vec3f(0.87, 0.70, 0.58), vec3f(0.93, 0.79, 0.69),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 15.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 15) { return c[15]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn getColor(n: f32, maxIter: f32, palette: i32) -> vec3f {
+                        if (n >= maxIter) { return vec3f(0.0); }
+                        let t = pow(n / maxIter, 0.5);
+                        switch (palette) {
+                            case 0: { return firePalette(t); }
+                            case 1: { return oceanPalette(t); }
+                            case 2: { return rainbowPalette(t); }
+                            case 3: { return electricPalette(t); }
+                            case 4: { return vec3f(t); }
+                            default: { return classicPalette(t); }
+                        }
+                    }
+                    
+                    @vertex
+                    fn vs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
+                        var pos = array<vec2f, 6>(
+                            vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+                            vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+                        );
+                        return vec4f(pos[vertexIndex], 0.0, 1.0);
+                    }
+                    
+                    @fragment
+                    fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+                        let fragCoord = vec2f(pos.x, u.resolution.y - pos.y);
+                        let uv = fragCoord / u.resolution;
+                        let aspect = u.resolution.x / u.resolution.y;
+                        let scale = 3.5 / u.zoom;
+                        
+                        let uvX = (uv.x - 0.5) * scale * aspect;
+                        let uvY = (uv.y - 0.5) * scale;
+                        
+                        let cx = ds_add(ds(u.centerX.x, u.centerX.y), ds(uvX, 0.0));
+                        let cy = ds_add(ds(u.centerY.x, u.centerY.y), ds(uvY, 0.0));
+                        
+                        var zr = ds(0.0, 0.0);
+                        var zi = ds(0.0, 0.0);
+                        var iter = 0;
+                        let maxI = i32(u.maxIter);
+                        
+                        for (var i = 0; i < 4096; i++) {
+                            if (i >= maxI) { break; }
+                            
+                            let zr2 = ds_sqr(zr);
+                            let zi2 = ds_sqr(zi);
+                            
+                            if (zr2.x + zi2.x > 4.0) { break; }
+                            
+                            let newZr = ds_add(ds_sub(zr2, zi2), cx);
+                            let newZi = ds_add(ds_add(ds_mul(zr, zi), ds_mul(zr, zi)), cy);
+                            
+                            zr = newZr;
+                            zi = newZi;
+                            iter++;
+                        }
+                        
+                        var n = f32(iter);
+                        if (iter < maxI) {
+                            let logZn = log(zr.x * zr.x + zi.x * zi.x) / 2.0;
+                            let nu = log(logZn / log(2.0)) / log(2.0);
+                            n = f32(iter) + 1.0 - nu;
+                        }
+                        
+                        let color = getColor(n, u.maxIter, i32(u.palette));
+                        return vec4f(color, 1.0);
+                    }
+                `;
+                
+                this.shaderModule = this.device.createShaderModule({ code: wgsl });
+            }
+
+            initBuffers() {
+                // Larger uniform buffer for vec2f center coordinates
+                // Size must be aligned to 16 bytes.
+                // center(16) + zoom(4) + maxIter(4) + palette(4) + padding(4) + resolution(8) = 40 bytes -> aligned to 48 or 64
+                // Previous: center(8) + zoom(4) + maxIter(4) + palette(4) + padding(4) + resolution(8) = 32
+                // New: 
+                // centerX (vec2f) - offset 0  (8 bytes)
+                // centerY (vec2f) - offset 8  (8 bytes)
+                // zoom    (f32)   - offset 16 (4 bytes)
+                // maxIter (f32)   - offset 20 (4 bytes)
+                // palette (f32)   - offset 24 (4 bytes)
+                // padding (f32)   - offset 28 (4 bytes)
+                // resolution (vec2f) - offset 32 (8 bytes)
+                // Total 40 bytes. Round up to 16-byte multiple? WGSL uniform structs have specific alignment rules.
+                // vec2f alignment is 8.
+                
+                this.uniformBuffer = this.device.createBuffer({
+                    size: 48, // Safe size
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+                });
+                
+                this.bindGroupLayout = this.device.createBindGroupLayout({
+                    entries: [{
+                        binding: 0,
+                        visibility: GPUShaderStage.FRAGMENT,
+                        buffer: { type: 'uniform' }
+                    }]
+                });
+                
+                this.bindGroup = this.device.createBindGroup({
+                    layout: this.bindGroupLayout,
+                    entries: [{
+                        binding: 0,
+                        resource: { buffer: this.uniformBuffer }
+                    }]
+                });
+            }
+
+            async render(centerX, centerY, zoom, paletteName) {
+                if (!this.device || !this.pipeline) return { maxIter: 256, time: 0 };
+                
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const paletteIndex = ['fire', 'ocean', 'rainbow', 'electric', 'grayscale', 'classic'].indexOf(paletteName);
+                const maxIter = Math.min(8192, state.iterBase + Math.floor(Math.log2(Math.max(1, zoom)) * 48));
+                
+                const [cxHigh, cxLow] = splitDouble(centerX);
+                const [cyHigh, cyLow] = splitDouble(centerY);
+
+                const uniformData = new Float32Array(12); // 48 bytes / 4
+                uniformData[0] = cxHigh;
+                uniformData[1] = cxLow;
+                uniformData[2] = cyHigh;
+                uniformData[3] = cyLow;
+                uniformData[4] = zoom;
+                uniformData[5] = maxIter;
+                uniformData[6] = paletteIndex;
+                uniformData[7] = 0; // padding
+                uniformData[8] = w;
+                uniformData[9] = h;
+                
+                this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+                
+                const startTime = performance.now();
+                const commandEncoder = this.device.createCommandEncoder();
+                const textureView = this.context.getCurrentTexture().createView();
+                
+                const renderPass = commandEncoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: textureView,
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: 'clear',
+                        storeOp: 'store'
+                    }]
+                });
+                
+                renderPass.setPipeline(this.pipeline);
+                renderPass.setBindGroup(0, this.bindGroup);
+                renderPass.draw(6);
+                renderPass.end();
+                
+                this.device.queue.submit([commandEncoder.finish()]);
+                await this.device.queue.onSubmittedWorkDone();
+                
+                return {
+                    maxIter,
+                    time: performance.now() - startTime
+                };
+            }
+        }
         
-        async function initRenderer() {
+        async function setRenderer(type) {
+            // Recreate canvas because context types cannot be changed once created
+            const oldCanvas = document.getElementById('canvas');
+            const newCanvas = document.createElement('canvas');
+            newCanvas.id = 'canvas';
+            oldCanvas.parentNode.replaceChild(newCanvas, oldCanvas);
+            canvas = newCanvas;
+            
             resize();
             
             try {
-                renderer = new WebGPURenderer(canvas);
-                await renderer.init();
-                state.renderer = 'WebGPU';
-            } catch (e) {
-                console.warn('WebGPU failed, trying WebGL:', e.message);
-                try {
+                if (type === 'WebGPU') {
+                    renderer = new WebGPURenderer(canvas);
+                    await renderer.init();
+                } else if (type === 'WebGPU64') {
+                    renderer = new WebGPURenderer64(canvas);
+                    await renderer.init();
+                } else if (type === 'WebGL') {
                     renderer = new WebGLRenderer(canvas);
-                    state.renderer = 'WebGL';
-                } catch (e2) {
-                    console.warn('WebGL failed, using Canvas2D:', e2.message);
+                } else if (type === 'WebGL64') {
+                    renderer = new WebGLRenderer64(canvas);
+                } else {
                     renderer = new Canvas2DRenderer(canvas);
-                    state.renderer = 'Canvas2D';
                 }
+                state.renderer = type;
+                document.getElementById('rendererSelect').value = type;
+            } catch (e) {
+                console.error(`Failed to initialize ${type}:`, e);
+                throw e;
             }
             
-            render();
+            bindCanvasEvents();
+            await render();
+        }
+
+        async function initRenderer() {
+            const types = ['WebGPU', 'WebGPU64', 'WebGL', 'Canvas2D'];
+            for (const type of types) {
+                try {
+                    await setRenderer(type);
+                    console.log(`Initialized with ${type}`);
+                    return;
+                } catch (e) {
+                    console.warn(`${type} failed, trying next...`);
+                }
+            }
         }
         
         function resize() {
@@ -992,19 +1577,31 @@
             
             await render();
         }
-        
-        canvas.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const factor = e.deltaY > 0 ? 0.8 : 1.25;
-            zoomAtPoint(e.clientX, e.clientY, factor);
-        }, { passive: false });
-        
-        canvas.addEventListener('mousedown', (e) => {
-            state.isDragging = true;
-            state.dragStart = { x: e.clientX, y: e.clientY };
-            state.centerAtDragStart = { x: state.centerX, y: state.centerY };
-            canvas.style.cursor = 'grabbing';
-        });
+
+        function bindCanvasEvents() {
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 0.8 : 1.25;
+                zoomAtPoint(e.clientX, e.clientY, factor);
+            }, { passive: false });
+            
+            canvas.addEventListener('mousedown', (e) => {
+                state.isDragging = true;
+                state.dragStart = { x: e.clientX, y: e.clientY };
+                state.centerAtDragStart = { x: state.centerX, y: state.centerY };
+                canvas.style.cursor = 'grabbing';
+            });
+            
+            canvas.addEventListener('dblclick', (e) => {
+                zoomAtPoint(e.clientX, e.clientY, 2);
+            });
+            
+            canvas.addEventListener('click', (e) => {
+                if (e.shiftKey) {
+                    zoomAtPoint(e.clientX, e.clientY, 0.5);
+                }
+            });
+        }
         
         window.addEventListener('mousemove', async (e) => {
             if (!state.isDragging) return;
@@ -1026,17 +1623,7 @@
         
         window.addEventListener('mouseup', () => {
             state.isDragging = false;
-            canvas.style.cursor = 'crosshair';
-        });
-        
-        canvas.addEventListener('dblclick', (e) => {
-            zoomAtPoint(e.clientX, e.clientY, 2);
-        });
-        
-        canvas.addEventListener('click', (e) => {
-            if (e.shiftKey) {
-                zoomAtPoint(e.clientX, e.clientY, 0.5);
-            }
+            if (canvas) canvas.style.cursor = 'crosshair';
         });
         
         document.addEventListener('keydown', async (e) => {
@@ -1094,6 +1681,15 @@
             }
         });
         
+        document.getElementById('rendererSelect').addEventListener('change', async (e) => {
+            try {
+                await setRenderer(e.target.value);
+            } catch (err) {
+                alert(`${e.target.value} is not supported on this device.`);
+                document.getElementById('rendererSelect').value = state.renderer;
+            }
+        });
+
         document.getElementById('palette').addEventListener('change', async (e) => {
             state.palette = e.target.value;
             await render();
