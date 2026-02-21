@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandelbrot Explorer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: #0a0a0a;
+            overflow: hidden;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            color: #e0e0e0;
+        }
+        
+        #canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            cursor: crosshair;
+        }
+        
+        #controls {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            background: rgba(20, 20, 25, 0.92);
+            backdrop-filter: blur(12px);
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-width: 200px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        
+        .control-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        
+        label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+        }
+        
+        select, button {
+            background: rgba(40, 40, 50, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #e0e0e0;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        select:hover, button:hover {
+            background: rgba(60, 60, 70, 0.9);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        
+        button:active {
+            transform: scale(0.97);
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 6px;
+        }
+        
+        .btn-group button {
+            padding: 8px 14px;
+            font-size: 16px;
+            line-height: 1;
+        }
+        
+        #status {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            background: rgba(20, 20, 25, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: 'Consolas', monospace;
+            color: #aaa;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        
+        #status span {
+            color: #4ecdc4;
+        }
+        
+        #help {
+            position: fixed;
+            bottom: 16px;
+            right: 16px;
+            background: rgba(20, 20, 25, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 11px;
+            color: #666;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        
+        #help kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin: 0 2px;
+        }
+        
+        #overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        
+        #overlay.visible {
+            display: flex;
+        }
+        
+        #overlay-content {
+            background: rgba(30, 30, 35, 0.98);
+            padding: 32px 48px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 500px;
+        }
+        
+        #overlay-content h2 {
+            margin-bottom: 20px;
+            color: #4ecdc4;
+        }
+        
+        #overlay-content p {
+            margin-bottom: 12px;
+            line-height: 1.6;
+            color: #ccc;
+        }
+        
+        #overlay-content kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-family: 'Consolas', monospace;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    
+    <div id="controls">
+        <div class="control-row">
+            <label>Palette</label>
+            <select id="palette">
+                <option value="fire">Fire</option>
+                <option value="ocean">Ocean</option>
+                <option value="rainbow">Rainbow</option>
+                <option value="electric">Electric</option>
+                <option value="grayscale">Grayscale</option>
+                <option value="classic">Classic</option>
+            </select>
+        </div>
+        <div class="control-row">
+            <label>Zoom</label>
+            <div class="btn-group">
+                <button id="zoomOut" title="Zoom Out">−</button>
+                <button id="zoomIn" title="Zoom In">+</button>
+                <button id="reset" title="Reset View">↺</button>
+            </div>
+        </div>
+        <div class="control-row">
+            <label>Detail</label>
+            <div class="btn-group">
+                <button id="iterDec" title="Decrease Detail">−</button>
+                <button id="iterInc" title="Increase Detail">+</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="status">
+        Renderer: <span id="rendererType">-</span> | 
+        Zoom: <span id="zoomLevel">1.00</span>× | 
+        Pos: (<span id="posX">-0.5</span>, <span id="posY">0</span>) |
+        Iter: <span id="iterCount">256</span> |
+        Time: <span id="renderTime">0</span>ms
+    </div>
+    
+    <div id="help">
+        Press <kbd>?</kbd> for help
+    </div>
+    
+    <div id="overlay">
+        <div id="overlay-content">
+            <h2>Controls</h2>
+            <p><kbd>Scroll</kbd> — Zoom in/out (centered on cursor)</p>
+            <p><kbd>Click + Drag</kbd> — Pan the view</p>
+            <p><kbd>Double Click</kbd> — Zoom in 2× at point</p>
+            <p><kbd>Shift + Click</kbd> — Zoom out 2× at point</p>
+            <p><kbd>Arrow Keys</kbd> — Pan (small increments)</p>
+            <p><kbd>+ / -</kbd> — Zoom in/out</p>
+            <p><kbd>Home</kbd> — Reset to default view</p>
+            <p><kbd>? / H</kbd> — Toggle this help</p>
+            <p style="margin-top: 16px; color: #666; font-size: 11px;">Click outside or press Escape to close</p>
+        </div>
+    </div>
+
+    <script type="module">
+        const canvas = document.getElementById('canvas');
+        
+        const state = {
+            centerX: -0.5,
+            centerY: 0,
+            zoom: 1,
+            iterBase: 256,
+            maxIter: 256,
+            palette: 'fire',
+            renderer: null,
+            isDragging: false,
+            dragStart: { x: 0, y: 0 },
+            centerAtDragStart: { x: 0, y: 0 }
+        };
+        
+        const palettes = {
+            fire: {
+                colors: [
+                    [0,0,0], [30,0,0], [60,10,0], [90,20,0], [120,40,0], 
+                    [160,60,0], [200,100,0], [230,140,10], [255,180,50], 
+                    [255,220,120], [255,255,200], [255,255,255]
+                ],
+                name: 'Fire'
+            },
+            ocean: {
+                colors: [
+                    [0,0,20], [0,20,60], [0,50,100], [0,90,130], 
+                    [20,130,150], [60,170,180], [120,200,210], 
+                    [180,220,230], [220,240,250], [255,255,255]
+                ],
+                name: 'Ocean'
+            },
+            rainbow: {
+                colors: [
+                    [255,0,0], [255,127,0], [255,255,0], [0,255,0], 
+                    [0,255,255], [0,0,255], [127,0,255], [255,0,255]
+                ],
+                name: 'Rainbow'
+            },
+            electric: {
+                colors: [
+                    [0,0,0], [10,0,30], [30,0,80], [80,20,150], 
+                    [150,80,200], [200,150,255], [255,255,255]
+                ],
+                name: 'Electric'
+            },
+            grayscale: {
+                colors: [
+                    [0,0,0], [30,30,30], [60,60,60], [100,100,100], 
+                    [150,150,150], [200,200,200], [255,255,255]
+                ],
+                name: 'Grayscale'
+            },
+            classic: {
+                colors: [
+                    [0,0,0], [0,0,0], [0,43,54], [0,77,72], [0,87,66], 
+                    [0,102,68], [38,166,65], [57,163,72], [82,156,87], 
+                    [109,150,108], [137,143,130], [166,137,134], 
+                    [194,153,140], [223,178,148], [237,201,175], [255,255,255]
+                ],
+                name: 'Classic'
+            }
+        };
+        
+        let renderer = null;
+        
+        class Canvas2DRenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+            }
+            
+            getColor(n, maxIter, palette) {
+                if (n >= maxIter) return [0, 0, 0];
+                const colors = palette.colors;
+                const t = (n / maxIter) ** 0.5;
+                const idx = t * (colors.length - 1);
+                const i = Math.floor(idx);
+                const f = idx - i;
+                
+                if (i >= colors.length - 1) return colors[colors.length - 1];
+                
+                const c1 = colors[i];
+                const c2 = colors[i + 1];
+                
+                return [
+                    Math.round(c1[0] + f * (c2[0] - c1[0])),
+                    Math.round(c1[1] + f * (c2[1] - c1[1])),
+                    Math.round(c1[2] + f * (c2[2] - c1[2]))
+                ];
+            }
+            
+            computeMandelbrot(cx, cy, maxIter) {
+                let zr = 0, zi = 0;
+                let iter = 0;
+                
+                while (zr * zr + zi * zi <= 4 && iter < maxIter) {
+                    const newZr = zr * zr - zi * zi + cx;
+                    zi = 2 * zr * zi + cy;
+                    zr = newZr;
+                    iter++;
+                }
+                
+                if (iter >= maxIter) return maxIter;
+                
+                const logZn = Math.log(zr * zr + zi * zi) / 2;
+                const nu = Math.log(logZn / Math.log(2)) / Math.log(2);
+                return iter + 1 - nu;
+            }
+            
+            render(centerX, centerY, zoom, paletteName) {
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const imageData = this.ctx.createImageData(w, h);
+                const data = imageData.data;
+                
+                const startTime = performance.now();
+                const scale = 3.5 / zoom;
+                const aspect = w / h;
+                
+                const minX = centerX - scale * aspect / 2;
+                const maxY = centerY + scale / 2;
+                const maxIter = Math.min(8192, state.iterBase + Math.floor(Math.log2(Math.max(1, zoom)) * 48));
+                const palette = palettes[paletteName];
+                
+                for (let py = 0; py < h; py++) {
+                    const cy = maxY - (py / h) * scale;
+                    
+                    for (let px = 0; px < w; px++) {
+                        const cx = minX + (px / w) * scale * aspect;
+                        
+                        const n = this.computeMandelbrot(cx, cy, maxIter);
+                        const [r, g, b] = this.getColor(n, maxIter, palette);
+                        
+                        const idx = (py * w + px) * 4;
+                        data[idx] = r;
+                        data[idx + 1] = g;
+                        data[idx + 2] = b;
+                        data[idx + 3] = 255;
+                    }
+                }
+                
+                this.ctx.putImageData(imageData, 0, 0);
+                
+                return {
+                    maxIter,
+                    time: performance.now() - startTime
+                };
+            }
+        }
+        
+        class WebGLRenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+                if (!this.gl) throw new Error('WebGL not supported');
+                
+                this.initShaders();
+                this.initBuffers();
+            }
+            
+            initShaders() {
+                const gl = this.gl;
+                
+                const vsSource = `
+                    attribute vec2 a_position;
+                    varying vec2 v_uv;
+                    void main() {
+                        v_uv = a_position * 0.5 + 0.5;
+                        gl_Position = vec4(a_position, 0.0, 1.0);
+                    }
+                `;
+                
+                const fsSource = `
+                    precision highp float;
+                    varying vec2 v_uv;
+                    
+                    uniform vec2 u_center;
+                    uniform float u_zoom;
+                    uniform int u_maxIter;
+                    uniform int u_palette;
+                    uniform vec2 u_resolution;
+                    
+                    vec3 firePalette(float t) {
+                        vec3 c0 = vec3(0.0, 0.0, 0.0);
+                        vec3 c1 = vec3(0.12, 0.0, 0.0);
+                        vec3 c2 = vec3(0.24, 0.04, 0.0);
+                        vec3 c3 = vec3(0.35, 0.08, 0.0);
+                        vec3 c4 = vec3(0.47, 0.16, 0.0);
+                        vec3 c5 = vec3(0.63, 0.24, 0.0);
+                        vec3 c6 = vec3(0.78, 0.39, 0.04);
+                        vec3 c7 = vec3(0.90, 0.55, 0.04);
+                        vec3 c8 = vec3(1.0, 0.71, 0.20);
+                        vec3 c9 = vec3(1.0, 0.86, 0.47);
+                        vec3 c10 = vec3(1.0, 1.0, 0.78);
+                        vec3 c11 = vec3(1.0, 1.0, 1.0);
+                        
+                        float idx = t * 11.0;
+                        if (idx < 1.0) return mix(c0, c1, idx);
+                        if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0);
+                        if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0);
+                        if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0);
+                        if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        if (idx < 9.0) return mix(c8, c9, idx - 8.0);
+                        if (idx < 10.0) return mix(c9, c10, idx - 9.0);
+                        return mix(c10, c11, idx - 10.0);
+                    }
+                    
+                    vec3 oceanPalette(float t) {
+                        vec3 c0 = vec3(0.0, 0.0, 0.08);
+                        vec3 c1 = vec3(0.0, 0.08, 0.24);
+                        vec3 c2 = vec3(0.0, 0.2, 0.39);
+                        vec3 c3 = vec3(0.0, 0.35, 0.51);
+                        vec3 c4 = vec3(0.08, 0.51, 0.59);
+                        vec3 c5 = vec3(0.24, 0.67, 0.71);
+                        vec3 c6 = vec3(0.47, 0.78, 0.82);
+                        vec3 c7 = vec3(0.71, 0.86, 0.90);
+                        vec3 c8 = vec3(0.86, 0.94, 0.98);
+                        vec3 c9 = vec3(1.0, 1.0, 1.0);
+                        
+                        float idx = t * 9.0;
+                        if (idx < 1.0) return mix(c0, c1, idx);
+                        if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0);
+                        if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0);
+                        if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0);
+                        if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        return mix(c8, c9, idx - 8.0);
+                    }
+                    
+                    vec3 rainbowPalette(float t) {
+                        vec3 c0 = vec3(1.0, 0.0, 0.0);
+                        vec3 c1 = vec3(1.0, 0.5, 0.0);
+                        vec3 c2 = vec3(1.0, 1.0, 0.0);
+                        vec3 c3 = vec3(0.0, 1.0, 0.0);
+                        vec3 c4 = vec3(0.0, 1.0, 1.0);
+                        vec3 c5 = vec3(0.0, 0.0, 1.0);
+                        vec3 c6 = vec3(0.5, 0.0, 1.0);
+                        vec3 c7 = vec3(1.0, 0.0, 1.0);
+                        
+                        float idx = t * 7.0;
+                        if (idx < 1.0) return mix(c0, c1, idx);
+                        if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0);
+                        if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0);
+                        if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        return mix(c6, c7, idx - 6.0);
+                    }
+                    
+                    vec3 electricPalette(float t) {
+                        vec3 c0 = vec3(0.0, 0.0, 0.0);
+                        vec3 c1 = vec3(0.04, 0.0, 0.12);
+                        vec3 c2 = vec3(0.12, 0.0, 0.31);
+                        vec3 c3 = vec3(0.31, 0.08, 0.59);
+                        vec3 c4 = vec3(0.59, 0.31, 0.78);
+                        vec3 c5 = vec3(0.78, 0.59, 1.0);
+                        vec3 c6 = vec3(1.0, 1.0, 1.0);
+                        
+                        float idx = t * 6.0;
+                        if (idx < 1.0) return mix(c0, c1, idx);
+                        if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0);
+                        if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0);
+                        return mix(c5, c6, idx - 5.0);
+                    }
+                    
+                    vec3 grayPalette(float t) {
+                        return vec3(t);
+                    }
+                    
+                    vec3 classicPalette(float t) {
+                        vec3 c0 = vec3(0.0, 0.0, 0.0);
+                        vec3 c1 = vec3(0.0, 0.0, 0.0);
+                        vec3 c2 = vec3(0.0, 0.17, 0.21);
+                        vec3 c3 = vec3(0.0, 0.30, 0.28);
+                        vec3 c4 = vec3(0.0, 0.34, 0.26);
+                        vec3 c5 = vec3(0.0, 0.40, 0.27);
+                        vec3 c6 = vec3(0.15, 0.65, 0.25);
+                        vec3 c7 = vec3(0.22, 0.64, 0.28);
+                        vec3 c8 = vec3(0.32, 0.61, 0.34);
+                        vec3 c9 = vec3(0.43, 0.59, 0.42);
+                        vec3 c10 = vec3(0.54, 0.56, 0.51);
+                        vec3 c11 = vec3(0.65, 0.54, 0.53);
+                        vec3 c12 = vec3(0.76, 0.60, 0.55);
+                        vec3 c13 = vec3(0.87, 0.70, 0.58);
+                        vec3 c14 = vec3(0.93, 0.79, 0.69);
+                        vec3 c15 = vec3(1.0, 1.0, 1.0);
+                        
+                        float idx = t * 15.0;
+                        if (idx < 1.0) return mix(c0, c1, idx);
+                        if (idx < 2.0) return mix(c1, c2, idx - 1.0);
+                        if (idx < 3.0) return mix(c2, c3, idx - 2.0);
+                        if (idx < 4.0) return mix(c3, c4, idx - 3.0);
+                        if (idx < 5.0) return mix(c4, c5, idx - 4.0);
+                        if (idx < 6.0) return mix(c5, c6, idx - 5.0);
+                        if (idx < 7.0) return mix(c6, c7, idx - 6.0);
+                        if (idx < 8.0) return mix(c7, c8, idx - 7.0);
+                        if (idx < 9.0) return mix(c8, c9, idx - 8.0);
+                        if (idx < 10.0) return mix(c9, c10, idx - 9.0);
+                        if (idx < 11.0) return mix(c10, c11, idx - 10.0);
+                        if (idx < 12.0) return mix(c11, c12, idx - 11.0);
+                        if (idx < 13.0) return mix(c12, c13, idx - 12.0);
+                        if (idx < 14.0) return mix(c13, c14, idx - 13.0);
+                        return mix(c14, c15, idx - 14.0);
+                    }
+                    
+                    vec3 getColor(float n, int maxIter, int palette) {
+                        if (n >= float(maxIter)) return vec3(0.0);
+                        float t = pow(n / float(maxIter), 0.5);
+                        if (palette == 0) return firePalette(t);
+                        if (palette == 1) return oceanPalette(t);
+                        if (palette == 2) return rainbowPalette(t);
+                        if (palette == 3) return electricPalette(t);
+                        if (palette == 4) return grayPalette(t);
+                        return classicPalette(t);
+                    }
+                    
+                    void main() {
+                        vec2 uv = v_uv;
+                        float aspect = u_resolution.x / u_resolution.y;
+                        float scale = 3.5 / u_zoom;
+                        
+                        float cx = u_center.x - scale * aspect * 0.5 + uv.x * scale * aspect;
+                        float cy = u_center.y - scale * 0.5 + uv.y * scale;
+                        
+                        float zr = 0.0;
+                        float zi = 0.0;
+                        int iter = 0;
+                        
+                        for (int i = 0; i < 4096; i++) {
+                            if (i >= u_maxIter) break;
+                            if (zr * zr + zi * zi > 4.0) break;
+                            
+                            float newZr = zr * zr - zi * zi + cx;
+                            zi = 2.0 * zr * zi + cy;
+                            zr = newZr;
+                            iter++;
+                        }
+                        
+                        float n = float(iter);
+                        if (iter < u_maxIter) {
+                            float logZn = log(zr * zr + zi * zi) / 2.0;
+                            float nu = log(logZn / log(2.0)) / log(2.0);
+                            n = float(iter) + 1.0 - nu;
+                        }
+                        
+                        vec3 color = getColor(n, u_maxIter, u_palette);
+                        gl_FragColor = vec4(color, 1.0);
+                    }
+                `;
+                
+                const vs = gl.createShader(gl.VERTEX_SHADER);
+                gl.shaderSource(vs, vsSource);
+                gl.compileShader(vs);
+                
+                const fs = gl.createShader(gl.FRAGMENT_SHADER);
+                gl.shaderSource(fs, fsSource);
+                gl.compileShader(fs);
+                
+                if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+                    console.error('Fragment shader error:', gl.getShaderInfoLog(fs));
+                }
+                
+                this.program = gl.createProgram();
+                gl.attachShader(this.program, vs);
+                gl.attachShader(this.program, fs);
+                gl.linkProgram(this.program);
+                
+                this.u_center = gl.getUniformLocation(this.program, 'u_center');
+                this.u_zoom = gl.getUniformLocation(this.program, 'u_zoom');
+                this.u_maxIter = gl.getUniformLocation(this.program, 'u_maxIter');
+                this.u_palette = gl.getUniformLocation(this.program, 'u_palette');
+                this.u_resolution = gl.getUniformLocation(this.program, 'u_resolution');
+            }
+            
+            initBuffers() {
+                const gl = this.gl;
+                const vertices = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+                
+                this.buffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+                gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+                
+                const pos = gl.getAttribLocation(this.program, 'a_position');
+                gl.enableVertexAttribArray(pos);
+                gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+            }
+            
+            render(centerX, centerY, zoom, paletteName) {
+                const gl = this.gl;
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                
+                gl.viewport(0, 0, w, h);
+                gl.useProgram(this.program);
+                
+                const paletteIndex = ['fire', 'ocean', 'rainbow', 'electric', 'grayscale', 'classic'].indexOf(paletteName);
+                const maxIter = Math.min(8192, state.iterBase + Math.floor(Math.log2(Math.max(1, zoom)) * 48));
+                
+                const startTime = performance.now();
+                
+                gl.uniform2f(this.u_center, centerX, centerY);
+                gl.uniform1f(this.u_zoom, zoom);
+                gl.uniform1i(this.u_maxIter, maxIter);
+                gl.uniform1i(this.u_palette, paletteIndex);
+                gl.uniform2f(this.u_resolution, w, h);
+                
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                
+                return {
+                    maxIter,
+                    time: performance.now() - startTime
+                };
+            }
+        }
+        
+        class WebGPURenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.device = null;
+                this.pipeline = null;
+            }
+            
+            async init() {
+                if (!navigator.gpu) {
+                    throw new Error('WebGPU not supported');
+                }
+                
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) throw new Error('No GPU adapter');
+                
+                this.device = await adapter.requestDevice();
+                this.context = this.canvas.getContext('webgpu');
+                
+                this.format = navigator.gpu.getPreferredCanvasFormat();
+                this.context.configure({
+                    device: this.device,
+                    format: this.format,
+                    alphaMode: 'opaque'
+                });
+                
+                this.initShaders();
+                this.initBuffers();
+                this.initPipeline();
+            }
+            
+            initShaders() {
+                const wgsl = `
+                    struct Uniforms {
+                        center: vec2f,
+                        zoom: f32,
+                        maxIter: f32,
+                        palette: f32,
+                        padding: f32,
+                        resolution: vec2f,
+                    };
+                    
+                    @group(0) @binding(0) var<uniform> u: Uniforms;
+                    
+                    fn firePalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 12>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.12, 0.0, 0.0), vec3f(0.24, 0.04, 0.0),
+                            vec3f(0.35, 0.08, 0.0), vec3f(0.47, 0.16, 0.0), vec3f(0.63, 0.24, 0.0),
+                            vec3f(0.78, 0.39, 0.04), vec3f(0.90, 0.55, 0.04), vec3f(1.0, 0.71, 0.20),
+                            vec3f(1.0, 0.86, 0.47), vec3f(1.0, 1.0, 0.78), vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 11.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 11) { return c[11]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn oceanPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 10>(
+                            vec3f(0.0, 0.0, 0.08), vec3f(0.0, 0.08, 0.24), vec3f(0.0, 0.2, 0.39),
+                            vec3f(0.0, 0.35, 0.51), vec3f(0.08, 0.51, 0.59), vec3f(0.24, 0.67, 0.71),
+                            vec3f(0.47, 0.78, 0.82), vec3f(0.71, 0.86, 0.90), vec3f(0.86, 0.94, 0.98),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 9.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 9) { return c[9]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn rainbowPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 8>(
+                            vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.5, 0.0), vec3f(1.0, 1.0, 0.0),
+                            vec3f(0.0, 1.0, 0.0), vec3f(0.0, 1.0, 1.0), vec3f(0.0, 0.0, 1.0),
+                            vec3f(0.5, 0.0, 1.0), vec3f(1.0, 0.0, 1.0)
+                        );
+                        let idx = t * 7.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 7) { return c[7]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn electricPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 7>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.04, 0.0, 0.12), vec3f(0.12, 0.0, 0.31),
+                            vec3f(0.31, 0.08, 0.59), vec3f(0.59, 0.31, 0.78), vec3f(0.78, 0.59, 1.0),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 6.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 6) { return c[6]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn classicPalette(t: f32) -> vec3f {
+                        let c = array<vec3f, 16>(
+                            vec3f(0.0, 0.0, 0.0), vec3f(0.0, 0.0, 0.0), vec3f(0.0, 0.17, 0.21),
+                            vec3f(0.0, 0.30, 0.28), vec3f(0.0, 0.34, 0.26), vec3f(0.0, 0.40, 0.27),
+                            vec3f(0.15, 0.65, 0.25), vec3f(0.22, 0.64, 0.28), vec3f(0.32, 0.61, 0.34),
+                            vec3f(0.43, 0.59, 0.42), vec3f(0.54, 0.56, 0.51), vec3f(0.65, 0.54, 0.53),
+                            vec3f(0.76, 0.60, 0.55), vec3f(0.87, 0.70, 0.58), vec3f(0.93, 0.79, 0.69),
+                            vec3f(1.0, 1.0, 1.0)
+                        );
+                        let idx = t * 15.0;
+                        let i = i32(floor(idx));
+                        let f = idx - f32(i);
+                        if (i >= 15) { return c[15]; }
+                        return mix(c[i], c[i + 1], f);
+                    }
+                    
+                    fn getColor(n: f32, maxIter: f32, palette: i32) -> vec3f {
+                        if (n >= maxIter) { return vec3f(0.0); }
+                        let t = pow(n / maxIter, 0.5);
+                        switch (palette) {
+                            case 0: { return firePalette(t); }
+                            case 1: { return oceanPalette(t); }
+                            case 2: { return rainbowPalette(t); }
+                            case 3: { return electricPalette(t); }
+                            case 4: { return vec3f(t); }
+                            default: { return classicPalette(t); }
+                        }
+                    }
+                    
+                    @vertex
+                    fn vs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
+                        var pos = array<vec2f, 6>(
+                            vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+                            vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+                        );
+                        return vec4f(pos[vertexIndex], 0.0, 1.0);
+                    }
+                    
+                    @fragment
+                    fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+                        let fragCoord = vec2f(pos.x, u.resolution.y - pos.y);
+                        let uv = fragCoord / u.resolution;
+                        let aspect = u.resolution.x / u.resolution.y;
+                        let scale = 3.5 / u.zoom;
+                        
+                        let cx = u.center.x + (uv.x - 0.5) * scale * aspect;
+                        let cy = u.center.y + (uv.y - 0.5) * scale;
+                        
+                        var zr = 0.0;
+                        var zi = 0.0;
+                        var iter = 0;
+                        let maxI = i32(u.maxIter);
+                        
+                        for (var i = 0; i < 4096; i++) {
+                            if (i >= maxI) { break; }
+                            if (zr * zr + zi * zi > 4.0) { break; }
+                            let newZr = zr * zr - zi * zi + cx;
+                            zi = 2.0 * zr * zi + cy;
+                            zr = newZr;
+                            iter++;
+                        }
+                        
+                        var n = f32(iter);
+                        if (iter < maxI) {
+                            let logZn = log(zr * zr + zi * zi) / 2.0;
+                            let nu = log(logZn / log(2.0)) / log(2.0);
+                            n = f32(iter) + 1.0 - nu;
+                        }
+                        
+                        let color = getColor(n, u.maxIter, i32(u.palette));
+                        return vec4f(color, 1.0);
+                    }
+                `;
+                
+                this.shaderModule = this.device.createShaderModule({ code: wgsl });
+            }
+            
+            initBuffers() {
+                this.uniformBuffer = this.device.createBuffer({
+                    size: 32,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+                });
+                
+                this.bindGroupLayout = this.device.createBindGroupLayout({
+                    entries: [{
+                        binding: 0,
+                        visibility: GPUShaderStage.FRAGMENT,
+                        buffer: { type: 'uniform' }
+                    }]
+                });
+                
+                this.bindGroup = this.device.createBindGroup({
+                    layout: this.bindGroupLayout,
+                    entries: [{
+                        binding: 0,
+                        resource: { buffer: this.uniformBuffer }
+                    }]
+                });
+            }
+
+            initPipeline() {
+                this.pipeline = this.device.createRenderPipeline({
+                    layout: this.device.createPipelineLayout({
+                        bindGroupLayouts: [this.bindGroupLayout]
+                    }),
+                    vertex: {
+                        module: this.shaderModule,
+                        entryPoint: 'vs'
+                    },
+                    fragment: {
+                        module: this.shaderModule,
+                        entryPoint: 'fs',
+                        targets: [{ format: this.format }]
+                    },
+                    primitive: { topology: 'triangle-list' }
+                });
+            }
+            
+            async render(centerX, centerY, zoom, paletteName) {
+                if (!this.device || !this.pipeline) return { maxIter: 256, time: 0 };
+                
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const paletteIndex = ['fire', 'ocean', 'rainbow', 'electric', 'grayscale', 'classic'].indexOf(paletteName);
+                const maxIter = Math.min(8192, state.iterBase + Math.floor(Math.log2(Math.max(1, zoom)) * 48));
+                
+                const uniformData = new Float32Array(8);
+                uniformData[0] = centerX;
+                uniformData[1] = centerY;
+                uniformData[2] = zoom;
+                uniformData[3] = maxIter;
+                uniformData[4] = paletteIndex;
+                uniformData[5] = 0; // padding
+                uniformData[6] = w;
+                uniformData[7] = h;
+                
+                this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+                
+                const startTime = performance.now();
+                const commandEncoder = this.device.createCommandEncoder();
+                const textureView = this.context.getCurrentTexture().createView();
+                
+                const renderPass = commandEncoder.beginRenderPass({
+                    colorAttachments: [{
+                        view: textureView,
+                        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+                        loadOp: 'clear',
+                        storeOp: 'store'
+                    }]
+                });
+                
+                renderPass.setPipeline(this.pipeline);
+                renderPass.setBindGroup(0, this.bindGroup);
+                renderPass.draw(6);
+                renderPass.end();
+                
+                this.device.queue.submit([commandEncoder.finish()]);
+                await this.device.queue.onSubmittedWorkDone();
+                
+                return {
+                    maxIter,
+                    time: performance.now() - startTime
+                };
+            }
+        }
+        
+        async function initRenderer() {
+            resize();
+            
+            try {
+                renderer = new WebGPURenderer(canvas);
+                await renderer.init();
+                state.renderer = 'WebGPU';
+            } catch (e) {
+                console.warn('WebGPU failed, trying WebGL:', e.message);
+                try {
+                    renderer = new WebGLRenderer(canvas);
+                    state.renderer = 'WebGL';
+                } catch (e2) {
+                    console.warn('WebGL failed, using Canvas2D:', e2.message);
+                    renderer = new Canvas2DRenderer(canvas);
+                    state.renderer = 'Canvas2D';
+                }
+            }
+            
+            render();
+        }
+        
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = window.innerWidth * dpr;
+            canvas.height = window.innerHeight * dpr;
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            
+            if (renderer && renderer.context && renderer.context.configure) {
+                renderer.context.configure({
+                    device: renderer.device,
+                    format: renderer.format,
+                    alphaMode: 'opaque'
+                });
+            }
+        }
+        
+        async function render() {
+            if (!renderer) return;
+            
+            const result = await renderer.render(state.centerX, state.centerY, state.zoom, state.palette);
+            
+            state.maxIter = result.maxIter;
+            updateStatus(result.time);
+        }
+        
+        function updateStatus(renderTime) {
+            document.getElementById('rendererType').textContent = state.renderer;
+            document.getElementById('zoomLevel').textContent = state.zoom < 1e6 ? state.zoom.toFixed(1) : state.zoom.toExponential(2);
+            document.getElementById('posX').textContent = state.centerX.toFixed(6);
+            document.getElementById('posY').textContent = state.centerY.toFixed(6);
+            document.getElementById('iterCount').textContent = state.maxIter;
+            document.getElementById('renderTime').textContent = renderTime.toFixed(0);
+        }
+        
+        function screenToComplex(sx, sy) {
+            const w = canvas.width;
+            const h = canvas.height;
+            const scale = 3.5 / state.zoom;
+            const aspect = w / h;
+            
+            const dpr = window.devicePixelRatio || 1;
+            const cx = state.centerX + (sx * dpr / w - 0.5) * scale * aspect;
+            const cy = state.centerY + (0.5 - sy * dpr / h) * scale;
+            
+            return [cx, cy];
+        }
+        
+        async function zoomAtPoint(sx, sy, factor) {
+            const [cx, cy] = screenToComplex(sx, sy);
+            
+            state.centerX = cx + (state.centerX - cx) / factor;
+            state.centerY = cy + (state.centerY - cy) / factor;
+            state.zoom *= factor;
+            
+            await render();
+        }
+        
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const factor = e.deltaY > 0 ? 0.8 : 1.25;
+            zoomAtPoint(e.clientX, e.clientY, factor);
+        }, { passive: false });
+        
+        canvas.addEventListener('mousedown', (e) => {
+            state.isDragging = true;
+            state.dragStart = { x: e.clientX, y: e.clientY };
+            state.centerAtDragStart = { x: state.centerX, y: state.centerY };
+            canvas.style.cursor = 'grabbing';
+        });
+        
+        window.addEventListener('mousemove', async (e) => {
+            if (!state.isDragging) return;
+            
+            const dx = e.clientX - state.dragStart.x;
+            const dy = e.clientY - state.dragStart.y;
+            
+            const dpr = window.devicePixelRatio || 1;
+            const w = canvas.width;
+            const h = canvas.height;
+            const scale = 3.5 / state.zoom;
+            const aspect = w / h;
+            
+            state.centerX = state.centerAtDragStart.x - (dx * dpr / w) * scale * aspect;
+            state.centerY = state.centerAtDragStart.y + (dy * dpr / h) * scale;
+            
+            await render();
+        });
+        
+        window.addEventListener('mouseup', () => {
+            state.isDragging = false;
+            canvas.style.cursor = 'crosshair';
+        });
+        
+        canvas.addEventListener('dblclick', (e) => {
+            zoomAtPoint(e.clientX, e.clientY, 2);
+        });
+        
+        canvas.addEventListener('click', (e) => {
+            if (e.shiftKey) {
+                zoomAtPoint(e.clientX, e.clientY, 0.5);
+            }
+        });
+        
+        document.addEventListener('keydown', async (e) => {
+            const step = 0.1 / state.zoom;
+            
+            switch(e.key) {
+                case 'ArrowUp':
+                    state.centerY += step;
+                    await render();
+                    break;
+                case 'ArrowDown':
+                    state.centerY -= step;
+                    await render();
+                    break;
+                case 'ArrowLeft':
+                    state.centerX -= step;
+                    await render();
+                    break;
+                case 'ArrowRight':
+                    state.centerX += step;
+                    await render();
+                    break;
+                case '+':
+                case '=':
+                    state.zoom *= 1.25;
+                    await render();
+                    break;
+                case '-':
+                    state.zoom *= 0.8;
+                    await render();
+                    break;
+                case 'Home':
+                    state.centerX = -0.5;
+                    state.centerY = 0;
+                    state.zoom = 1;
+                    state.iterBase = 256;
+                    await render();
+                    break;
+                case '[':
+                    state.iterBase = Math.max(16, Math.floor(state.iterBase / 1.5));
+                    await render();
+                    break;
+                case ']':
+                    state.iterBase = Math.min(8192, Math.floor(state.iterBase * 1.5));
+                    await render();
+                    break;
+                case '?':
+                case 'h':
+                case 'H':
+                    document.getElementById('overlay').classList.toggle('visible');
+                    break;
+                case 'Escape':
+                    document.getElementById('overlay').classList.remove('visible');
+                    break;
+            }
+        });
+        
+        document.getElementById('palette').addEventListener('change', async (e) => {
+            state.palette = e.target.value;
+            await render();
+        });
+        
+        document.getElementById('zoomIn').addEventListener('click', async () => {
+            state.zoom *= 1.5;
+            await render();
+        });
+        
+        document.getElementById('zoomOut').addEventListener('click', async () => {
+            state.zoom *= 0.67;
+            await render();
+        });
+        
+        document.getElementById('reset').addEventListener('click', async () => {
+            state.centerX = -0.5;
+            state.centerY = 0;
+            state.zoom = 1;
+            state.iterBase = 256;
+            await render();
+        });
+
+        document.getElementById('iterInc').addEventListener('click', async () => {
+            state.iterBase = Math.min(8192, Math.floor(state.iterBase * 1.5));
+            await render();
+        });
+
+        document.getElementById('iterDec').addEventListener('click', async () => {
+            state.iterBase = Math.max(16, Math.floor(state.iterBase / 1.5));
+            await render();
+        });
+        
+        document.getElementById('overlay').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('overlay')) {
+                document.getElementById('overlay').classList.remove('visible');
+            }
+        });
+        
+        window.addEventListener('resize', async () => {
+            resize();
+            await render();
+        });
+        
+        initRenderer();
+    </script>
+</body>
+</html>
