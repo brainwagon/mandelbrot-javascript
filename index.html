@@ -178,7 +178,7 @@
                 <option value="WebGPU">WebGPU (32-bit)</option>
                 <option value="WebGPU64">WebGPU (64-bit)</option>
                 <option value="WebGL">WebGL (32-bit)</option>
-                <option value="WebGL64">WebGL (64-bit)</option>
+                <option value="WebGL64">WebGL (64-bit, broken?)</option>
                 <option value="Canvas2D">Canvas 2D (64-bit)</option>
             </select>
         </div>
@@ -667,6 +667,14 @@
             }
         }
 
+        // TODO: This renderer still does not achieve the expected precision
+        // improvement over the 32-bit WebGL renderer. The double-single arithmetic
+        // may still be defeated by GLSL compiler optimizations (algebraic
+        // simplification, FMA fusion, or extended-precision intermediates) that
+        // the u_one barrier approach does not fully prevent. GLSL ES 3.0 lacks
+        // the `precise` qualifier (added in ES 3.2) that would guarantee strict
+        // IEEE 754 operation ordering. A working solution may require a different
+        // algorithmic approach or a compute-shader-based renderer.
         class WebGLRenderer64 extends WebGLRenderer {
             initShaders() {
                 const gl = this.gl;
@@ -696,16 +704,28 @@
                     uniform int u_palette;
                     uniform vec2 u_resolution;
                     uniform float u_split;
+                    // GLSL compiler optimization barrier. Set to 1.0 from JavaScript.
+                    // Unlike WGSL, the GLSL spec allows compilers to algebraically simplify
+                    // floating-point expressions (e.g. x-(x-y) -> y) and fuse multiply-add
+                    // into FMA instructions. Both optimizations destroy the rounding-error
+                    // tracking that double-single arithmetic depends on. Multiplying critical
+                    // intermediates by this uniform (whose value the compiler cannot know at
+                    // compile time) prevents these optimizations while being a numeric no-op
+                    // at runtime (x * 1.0 = x in IEEE 754).
+                    uniform float u_one;
 
                     vec2 ds_set(float a) { return vec2(a, 0.0); }
 
+                    // TwoSum: computes s = a + b and captures the rounding error.
+                    // The * u_one barriers prevent the compiler from simplifying
+                    // (s - v) back to a.x, which would zero out the error term.
                     vec2 ds_add(vec2 a, vec2 b) {
                         float s = a.x + b.x;
-                        float v = s - a.x;
+                        float v = (s - a.x) * u_one;
                         float e = (a.x - (s - v)) + (b.x - v);
                         float g = e + a.y + b.y;
                         float zh = s + g;
-                        float zl = g - (zh - s);
+                        float zl = g - (zh * u_one - s);
                         return vec2(zh, zl);
                     }
 
@@ -713,30 +733,40 @@
                         return ds_add(a, vec2(-b.x, -b.y));
                     }
 
+                    // Dekker TwoProduct: splits each operand into 12-bit halves using
+                    // the Veltkamp split (u_split = 2^12+1 = 4097), then reconstructs
+                    // the rounding error from the partial products.
+                    // Barriers on the split intermediates prevent hx-(hx-a.x) -> a.x,
+                    // and the barrier on (a_hi*b_hi) prevents FMA fusion with -p.
                     vec2 ds_mul(vec2 a, vec2 b) {
                         float hx = a.x * u_split;
-                        float a_hi = hx - (hx - a.x);
+                        float tx = (hx - a.x) * u_one;
+                        float a_hi = hx - tx;
                         float a_lo = a.x - a_hi;
                         float hy = b.x * u_split;
-                        float b_hi = hy - (hy - b.x);
+                        float ty = (hy - b.x) * u_one;
+                        float b_hi = hy - ty;
                         float b_lo = b.x - b_hi;
                         float p = a.x * b.x;
-                        float e = ((a_hi * b_hi - p) + a_hi * b_lo + a_lo * b_hi) + a_lo * b_lo;
+                        float prod = (a_hi * b_hi) * u_one;
+                        float e = ((prod - p) + a_hi * b_lo + a_lo * b_hi) + a_lo * b_lo;
                         float g = e + a.x * b.y + a.y * b.x;
                         float zh = p + g;
-                        float zl = g - (zh - p);
+                        float zl = g - (zh * u_one - p);
                         return vec2(zh, zl);
                     }
 
                     vec2 ds_sqr(vec2 a) {
                         float hx = a.x * u_split;
-                        float a_hi = hx - (hx - a.x);
+                        float tx = (hx - a.x) * u_one;
+                        float a_hi = hx - tx;
                         float a_lo = a.x - a_hi;
                         float p = a.x * a.x;
-                        float e = ((a_hi * a_hi - p) + 2.0 * a_hi * a_lo) + a_lo * a_lo;
+                        float prod = (a_hi * a_hi) * u_one;
+                        float e = ((prod - p) + 2.0 * a_hi * a_lo) + a_lo * a_lo;
                         float g = e + 2.0 * a.x * a.y;
                         float zh = p + g;
-                        float zl = g - (zh - p);
+                        float zl = g - (zh * u_one - p);
                         return vec2(zh, zl);
                     }
 
@@ -883,6 +913,7 @@
                 this.u_palette = gl.getUniformLocation(this.program, 'u_palette');
                 this.u_resolution = gl.getUniformLocation(this.program, 'u_resolution');
                 this.u_split = gl.getUniformLocation(this.program, 'u_split');
+                this.u_one = gl.getUniformLocation(this.program, 'u_one');
             }
 
             render(centerX, centerY, zoom, paletteName) {
@@ -903,6 +934,7 @@
                 gl.uniform1i(this.u_palette, paletteIndex);
                 gl.uniform2f(this.u_resolution, w, h);
                 gl.uniform1f(this.u_split, 4097.0);
+                gl.uniform1f(this.u_one, 1.0);
                 gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
                 return { maxIter, time: performance.now() - startTime };
             }
